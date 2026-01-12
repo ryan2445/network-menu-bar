@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:network-menu-bar}",
+      "name": "Debug network-menu-bar",
+      "target": "network-menu-bar",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug network-menu-bar"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:network-menu-bar}",
+      "name": "Release network-menu-bar",
+      "target": "network-menu-bar",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release network-menu-bar"
+    }
+  ]
+}
