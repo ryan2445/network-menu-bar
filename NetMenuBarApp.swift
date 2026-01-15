@@ -1,15 +1,30 @@
+import ServiceManagement
 import SwiftUI
 
 @main
 
 struct NetMenuBarApp: App {
   @StateObject private var monitor = NetworkRateMonitor()
+  @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
   var body: some Scene {
     MenuBarExtra {
       VStack(spacing: 8) {
-        Text("Down: \(monitor.downloadText)")
         Text("Up:   \(monitor.uploadText)")
+        Text("Down: \(monitor.downloadText)")
+        Divider()
+        Toggle("Launch at Login", isOn: $launchAtLogin)
+          .onChange(of: launchAtLogin) { _, newValue in
+            do {
+              if newValue {
+                try SMAppService.mainApp.register()
+              } else {
+                try SMAppService.mainApp.unregister()
+              }
+            } catch {
+              launchAtLogin = SMAppService.mainApp.status == .enabled
+            }
+          }
         Divider()
         Button("Quit") { NSApplication.shared.terminate(nil) }
       }.padding(12)
@@ -26,7 +41,7 @@ struct NetMenuBarApp: App {
     let font = NSFont.monospacedSystemFont(ofSize: 8, weight: .regular)
     let textAttributes: [NSAttributedString.Key: Any] = [
       .font: font,
-      .foregroundColor: NSColor.labelColor
+      .foregroundColor: NSColor.labelColor,
     ]
     let attributedString = NSAttributedString(string: text, attributes: textAttributes)
 

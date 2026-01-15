@@ -14,7 +14,7 @@ final class NetworkRateMonitor: ObservableObject {
   var downloadCompact: String { formatCompact(bytesPerSec: downloadBytesPerSecond) }
   var uploadCompact: String { formatCompact(bytesPerSec: uploadBytesPerSecond) }
 
-  init(sampleInterval: TimeInterval = 1.0) {
+  init(sampleInterval: TimeInterval = 5.0) {
     task = Task {
       while !Task.isCancelled {
         await self.updateRates()
