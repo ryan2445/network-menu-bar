@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Run Unit Tests
+        run: ./scripts/test.sh
+
+      - name: Build App Bundle & DMG
+        run: ./build-app.sh --dmg test-build
+
+      - name: Verify Bundle Signature
+        run: |
+          codesign --verify --deep --strict "Network Menu Bar.app"
+          codesign -dvvv "Network Menu Bar.app"
+
+      - name: Verify Distribution Artifacts
+        run: |
+          test -f dist/NetworkMenuBar-test-build.dmg
+          test -f dist/NetworkMenuBar-test-build.zip
+          test -f dist/checksums.txt
+          cd dist && shasum -a 256 -c checksums.txt

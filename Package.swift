@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -6,12 +6,24 @@ import PackageDescription
 let package = Package(
   name: "network-menu-bar",
   platforms: [
-    .macOS(.v26)
+    .macOS(.v14)
+  ],
+  products: [
+    .executable(name: "network-menu-bar", targets: ["network-menu-bar"])
   ],
   targets: [
     .executableTarget(
       name: "network-menu-bar",
-      path: "."
+      path: ".",
+      exclude: [
+        "Network Menu Bar.app",
+        "build-app.sh",
+        "Info.plist",
+        "GEMINI.md",
+        "README.md",
+        "scripts",
+        "dist"
+      ]
     )
   ]
 )

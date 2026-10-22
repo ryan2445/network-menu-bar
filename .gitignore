@@ -4,3 +4,5 @@ AGENTS.md
 .claude
 .build
 Network Menu Bar.app
+dist/
+.DS_Store

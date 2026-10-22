@@ -1,23 +1,51 @@
+import Darwin
 import Foundation
-import SystemConfiguration
+
+/// Snapshot representing a point-in-time network rate measurement.
+public struct NetworkRateSnapshot: Sendable, Equatable {
+  public let downloadBytesPerSecond: Double
+  public let uploadBytesPerSecond: Double
+  public let downloadText: String
+  public let uploadText: String
+  public let downloadCompact: String
+  public let uploadCompact: String
+
+  public init(
+    downloadBytesPerSecond: Double = 0,
+    uploadBytesPerSecond: Double = 0,
+    downloadText: String = "0.00 B/s  (0.00 Mbps)",
+    uploadText: String = "0.00 B/s  (0.00 Mbps)",
+    downloadCompact: String = "  0.00 B/s",
+    uploadCompact: String = "  0.00 B/s"
+  ) {
+    self.downloadBytesPerSecond = downloadBytesPerSecond
+    self.uploadBytesPerSecond = uploadBytesPerSecond
+    self.downloadText = downloadText
+    self.uploadText = uploadText
+    self.downloadCompact = downloadCompact
+    self.uploadCompact = uploadCompact
+  }
+}
 
 @MainActor
-final class NetworkRateMonitor: ObservableObject {
-  @Published private(set) var downloadBytesPerSecond: Double = 0
-  @Published private(set) var uploadBytesPerSecond: Double = 0
+public final class NetworkRateMonitor: ObservableObject {
+  @Published public private(set) var snapshot: NetworkRateSnapshot = NetworkRateSnapshot()
+
+  // Backward-compatible accessors
+  public var downloadBytesPerSecond: Double { snapshot.downloadBytesPerSecond }
+  public var uploadBytesPerSecond: Double { snapshot.uploadBytesPerSecond }
+  public var downloadText: String { snapshot.downloadText }
+  public var uploadText: String { snapshot.uploadText }
+  public var downloadCompact: String { snapshot.downloadCompact }
+  public var uploadCompact: String { snapshot.uploadCompact }
 
   private var task: Task<Void, Never>?
   private var lastSample: (timestamp: TimeInterval, inputBytes: UInt64, outBytes: UInt64)?
 
-  var downloadText: String { formatRate(bytesPerSec: downloadBytesPerSecond) }
-  var uploadText: String { formatRate(bytesPerSec: uploadBytesPerSecond) }
-  var downloadCompact: String { formatCompact(bytesPerSec: downloadBytesPerSecond) }
-  var uploadCompact: String { formatCompact(bytesPerSec: uploadBytesPerSecond) }
-
-  init(sampleInterval: TimeInterval = 5.0) {
-    task = Task {
+  public init(sampleInterval: TimeInterval = 5.0) {
+    task = Task { [weak self] in
       while !Task.isCancelled {
-        await self.updateRates()
+        await self?.updateRates()
         try? await Task.sleep(for: .seconds(sampleInterval))
       }
     }
@@ -27,85 +55,152 @@ final class NetworkRateMonitor: ObservableObject {
     task?.cancel()
   }
 
-  private func updateRates() async {
+  public func updateRates() async {
     let now = Date().timeIntervalSince1970
-    let totals = await Task.detached { Self.readTotals() }.value
+    // Query 64-bit interface statistics directly via sysctl kernel call (sub-millisecond)
+    let totals = Self.readTotals()
 
     guard let last = lastSample else {
       lastSample = (now, totals.inBytes, totals.outBytes)
       return
     }
 
-    let time_diff = now - last.timestamp
-    guard time_diff > 0 else { return }
+    let timeDiff = now - last.timestamp
+    guard timeDiff > 0 else { return }
 
-    let input_difference = totals.inBytes &- last.inputBytes
-    let output_difference = totals.outBytes &- last.outBytes
+    // Using true 64-bit counters from if_data64, avoiding 32-bit rollover false spikes
+    let inputDifference = totals.inBytes >= last.inputBytes
+      ? (totals.inBytes - last.inputBytes)
+      : 0
+    let outputDifference = totals.outBytes >= last.outBytes
+      ? (totals.outBytes - last.outBytes)
+      : 0
 
     lastSample = (now, totals.inBytes, totals.outBytes)
 
-    self.downloadBytesPerSecond = Double(input_difference) / time_diff
-    self.uploadBytesPerSecond = Double(output_difference) / time_diff
+    let downRate = Double(inputDifference) / timeDiff
+    let upRate = Double(outputDifference) / timeDiff
+
+    let newSnapshot = NetworkRateSnapshot(
+      downloadBytesPerSecond: downRate,
+      uploadBytesPerSecond: upRate,
+      downloadText: Self.formatRate(bytesPerSec: downRate),
+      uploadText: Self.formatRate(bytesPerSec: upRate),
+      downloadCompact: Self.formatCompact(bytesPerSec: downRate),
+      uploadCompact: Self.formatCompact(bytesPerSec: upRate)
+    )
+
+    // Atomically update snapshot once per interval, avoiding redundant SwiftUI invalidations
+    if self.snapshot != newSnapshot {
+      self.snapshot = newSnapshot
+    }
   }
 
-  // Reads total in/out bytes across interfaces (excluding loopback)
-  private nonisolated static func readTotals() -> (inBytes: UInt64, outBytes: UInt64) {
-    var interfaces: UnsafeMutablePointer<ifaddrs>?
-    guard getifaddrs(&interfaces) == 0 else {
-      return (0, 0)
+  /// Reads total network byte counters using 64-bit kernel statistics (NET_RT_IFLIST2).
+  /// Excludes loopback and down/inactive interfaces.
+  public nonisolated static func readTotals() -> (inBytes: UInt64, outBytes: UInt64) {
+    if let totals = readTotalsSysctl() {
+      return totals
     }
-    defer { freeifaddrs(interfaces) }
+    return readTotalsGetifaddrs()
+  }
+
+  private nonisolated static func readTotalsSysctl() -> (inBytes: UInt64, outBytes: UInt64)? {
+    var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0]
+    var len: Int = 0
+    guard sysctl(&mib, UInt32(mib.count), nil, &len, nil, 0) == 0, len > 0 else {
+      return nil
+    }
+
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: len)
+    defer { buffer.deallocate() }
+
+    guard sysctl(&mib, UInt32(mib.count), buffer, &len, nil, 0) == 0 else {
+      return nil
+    }
 
     var inBytes: UInt64 = 0
     var outBytes: UInt64 = 0
+    var cursor = buffer
+    let end = buffer + len
 
-    var currentInterface = interfaces
-    while currentInterface != nil {
-      let interface = currentInterface!.pointee
+    while cursor < end {
+      let msg = cursor.withMemoryRebound(to: if_msghdr2.self, capacity: 1) { $0.pointee }
+      guard msg.ifm_msglen > 0 else { break }
 
-      // Only consider link-layer stats
-      let flags = Int32(interface.ifa_flags)
-      let isUp = (flags & IFF_UP) != 0
-      let isRunning = (flags & IFF_RUNNING) != 0
-      let isLoopback = (flags & IFF_LOOPBACK) != 0
+      if msg.ifm_type == RTM_IFINFO2 {
+        let flags = Int32(msg.ifm_flags)
+        let isUp = (flags & IFF_UP) != 0
+        let isRunning = (flags & IFF_RUNNING) != 0
+        let isLoopback = (flags & IFF_LOOPBACK) != 0
 
-      if isUp && isRunning && !isLoopback {
-        if let data = interface.ifa_data {
-          // if_data holds byte counters
+        if isUp && isRunning && !isLoopback {
+          inBytes &+= msg.ifm_data.ifi_ibytes
+          outBytes &+= msg.ifm_data.ifi_obytes
+        }
+      }
+
+      cursor += Int(msg.ifm_msglen)
+    }
+
+    return (inBytes, outBytes)
+  }
+
+  /// Fallback reader using getifaddrs, strictly filtering for AF_LINK interfaces.
+  private nonisolated static func readTotalsGetifaddrs() -> (inBytes: UInt64, outBytes: UInt64) {
+    var interfaces: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&interfaces) == 0, let first = interfaces else {
+      return (0, 0)
+    }
+    defer { freeifaddrs(first) }
+
+    var inBytes: UInt64 = 0
+    var outBytes: UInt64 = 0
+    var current: UnsafeMutablePointer<ifaddrs>? = first
+
+    while let ptr = current {
+      let interface = ptr.pointee
+
+      if let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_LINK) {
+        let flags = Int32(interface.ifa_flags)
+        let isUp = (flags & IFF_UP) != 0
+        let isRunning = (flags & IFF_RUNNING) != 0
+        let isLoopback = (flags & IFF_LOOPBACK) != 0
+
+        if isUp && isRunning && !isLoopback, let data = interface.ifa_data {
           let ifd = data.assumingMemoryBound(to: if_data.self).pointee
           inBytes &+= UInt64(ifd.ifi_ibytes)
           outBytes &+= UInt64(ifd.ifi_obytes)
         }
       }
 
-      currentInterface = interface.ifa_next
+      current = interface.ifa_next
     }
 
     return (inBytes, outBytes)
   }
 
-  private func formatCompact(bytesPerSec: Double) -> String {
+  public static func formatCompact(bytesPerSec: Double) -> String {
     let (value, unit) = scaled(bytesPerSec)
     return String(format: "%6.2f %@", value, unit)
   }
 
-  private func formatRate(bytesPerSec: Double) -> String {
+  public static func formatRate(bytesPerSec: Double) -> String {
     let (value, unit) = scaled(bytesPerSec)
-    let mbps = (bytesPerSec * 8) / 1_000_000.0
+    let mbps = (bytesPerSec * 8.0) / 1_000_000.0
     return String(format: "%.2f %@  (%.2f Mbps)", value, unit, mbps)
   }
 
-  private func scaled(_ bytesPerSec: Double) -> (Double, String) {
+  public static func scaled(_ bytesPerSec: Double) -> (Double, String) {
     let absVal = abs(bytesPerSec)
-    switch absVal {
-    case 0..<1_000:
+    if absVal < 999.995 {
       return (bytesPerSec, "B/s")
-    case 1_000..<1_000_000:
-      return (bytesPerSec / 1_000, "KB/s")
-    case 1_000_000..<1_000_000_000:
-      return (bytesPerSec / 1_000_000, "MB/s")
-    default:
-      return (bytesPerSec / 1_000_000_000, "GB/s")
+    } else if absVal < 999_995.0 {
+      return (bytesPerSec / 1_000.0, "KB/s")
+    } else if absVal < 999_995_000.0 {
+      return (bytesPerSec / 1_000_000.0, "MB/s")
+    } else {
+      return (bytesPerSec / 1_000_000_000.0, "GB/s")
     }
   }
 }

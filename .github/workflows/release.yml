@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.0.0 or v1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    name: Build & Publish Release
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Determine Version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RAW_VER="${{ github.event.inputs.version }}"
+          else
+            RAW_VER="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip leading 'v'
+          CLEAN_VER="${RAW_VER#v}"
+          TAG_VER="v${CLEAN_VER}"
+          echo "clean_version=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+          echo "tag_version=${TAG_VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Test Suite
+        run: ./scripts/test.sh
+
+      - name: Build Application Bundle & Packages
+        run: |
+          ./build-app.sh --dmg "${{ steps.version.outputs.clean_version }}"
+
+      - name: Verify Distribution Packages
+        run: |
+          codesign --verify --deep --strict "Network Menu Bar.app"
+          cd dist
+          shasum -a 256 -c checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag_version }}
+          name: Network Menu Bar ${{ steps.version.outputs.tag_version }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/NetworkMenuBar-${{ steps.version.outputs.clean_version }}.dmg
+            dist/NetworkMenuBar-${{ steps.version.outputs.clean_version }}.zip
+            dist/checksums.txt
