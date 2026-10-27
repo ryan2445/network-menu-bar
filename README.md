@@ -50,7 +50,3 @@ To also generate the distribution DMG and ZIP packages locally:
 ```
 
 ---
-
-## 📄 License
-
-MIT License. See [LICENSE](LICENSE) for details if applicable.
