@@ -6,6 +6,10 @@ A lightweight, high-performance macOS menu bar application that displays real-ti
 ![Swift 6](https://img.shields.io/badge/Swift-6.3-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
+<img width="101" height="31" alt="Screenshot 2026-10-27 at 3 41 05 PM" src="https://github.com/user-attachments/assets/78938596-f413-44da-802a-f5af66fde7db" />
+
+<img width="319" height="126" alt="Screenshot 2026-10-27 at 3 41 32 PM" src="https://github.com/user-attachments/assets/81100ab5-e1f8-4300-a5c4-1b23e3594497" />
+
 ---
 
 ## 🚀 Installation
