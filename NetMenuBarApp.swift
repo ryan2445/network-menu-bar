@@ -1,55 +1,19 @@
 import ServiceManagement
 import SwiftUI
 
-@main
-struct NetMenuBarApp: App {
-  @StateObject private var monitor = NetworkRateMonitor()
-  @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
-  @State private var cachedImage: NSImage?
-  @State private var lastRenderedKey: String = ""
-
-  init() {
-    Self.ensureLaunchAtLoginOnStartup()
-  }
-
-  var body: some Scene {
-    MenuBarExtra {
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Up:   \(monitor.uploadText)")
-          .font(.system(.body, design: .monospaced))
-        Text("Down: \(monitor.downloadText)")
-          .font(.system(.body, design: .monospaced))
-
-        Divider()
-
-        Toggle("Launch at Login", isOn: $launchAtLogin)
-          .onChange(of: launchAtLogin) { _, newValue in
-            handleLaunchAtLoginChange(enabled: newValue)
-          }
-
-        if SMAppService.mainApp.status == .requiresApproval {
-          Button("Open Login Items Settings…") {
-            SMAppService.openSystemSettingsLoginItems()
-          }
-          .font(.caption)
-        }
-
-        Divider()
-
-        Button("Quit") {
-          NSApplication.shared.terminate(nil)
-        }
-        .keyboardShortcut("q")
-      }
-      .padding(12)
-    } label: {
-      Image(nsImage: menuBarIcon(up: monitor.uploadCompact, down: monitor.downloadCompact))
-    }
-  }
+@MainActor
+final class AppState: ObservableObject {
+  @Published var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
+  private var cachedImage: NSImage?
+  private var lastRenderedKey: String = ""
 
   // MARK: - Launch at Login Management
 
   private static let explicitlyDisabledKey = "hasExplicitlyDisabledLaunchAtLogin"
+
+  init() {
+    Self.ensureLaunchAtLoginOnStartup()
+  }
 
   private static func ensureLaunchAtLoginOnStartup() {
     let explicitlyDisabled = UserDefaults.standard.bool(forKey: explicitlyDisabledKey)
@@ -66,7 +30,7 @@ struct NetMenuBarApp: App {
     }
   }
 
-  private func handleLaunchAtLoginChange(enabled: Bool) {
+  func handleLaunchAtLoginChange(enabled: Bool) {
     let service = SMAppService.mainApp
     do {
       if enabled {
@@ -84,17 +48,15 @@ struct NetMenuBarApp: App {
 
   // MARK: - Menu Bar Image Rendering & Memoization
 
-  private func menuBarIcon(up: String, down: String) -> NSImage {
+  func menuBarIcon(up: String, down: String) -> NSImage {
     let key = "\(up)|\(down)"
     if let cached = cachedImage, lastRenderedKey == key {
       return cached
     }
 
     let image = Self.createVectorImage(up: up, down: down)
-    DispatchQueue.main.async {
-      self.cachedImage = image
-      self.lastRenderedKey = key
-    }
+    cachedImage = image
+    lastRenderedKey = key
     return image
   }
 
@@ -130,5 +92,46 @@ struct NetMenuBarApp: App {
     // including Dark Mode, Light Mode, and inverted selection colors when active.
     image.isTemplate = true
     return image
+  }
+}
+
+@main
+struct NetMenuBarApp: App {
+  @StateObject private var monitor = NetworkRateMonitor()
+  @StateObject private var appState = AppState()
+
+  var body: some Scene {
+    MenuBarExtra {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Up:   \(monitor.uploadText)")
+          .font(.system(.body, design: .monospaced))
+        Text("Down: \(monitor.downloadText)")
+          .font(.system(.body, design: .monospaced))
+
+        Divider()
+
+        Toggle("Launch at Login", isOn: $appState.launchAtLogin)
+          .onChange(of: appState.launchAtLogin) { _, newValue in
+            appState.handleLaunchAtLoginChange(enabled: newValue)
+          }
+
+        if SMAppService.mainApp.status == .requiresApproval {
+          Button("Open Login Items Settings…") {
+            SMAppService.openSystemSettingsLoginItems()
+          }
+          .font(.caption)
+        }
+
+        Divider()
+
+        Button("Quit") {
+          NSApplication.shared.terminate(nil)
+        }
+        .keyboardShortcut("q")
+      }
+      .padding(12)
+    } label: {
+      Image(nsImage: appState.menuBarIcon(up: monitor.uploadCompact, down: monitor.downloadCompact))
+    }
   }
 }

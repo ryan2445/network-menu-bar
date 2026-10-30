@@ -19,7 +19,6 @@ let package = Package(
         "Network Menu Bar.app",
         "build-app.sh",
         "Info.plist",
-        "GEMINI.md",
         "README.md",
         "scripts",
         "dist"
